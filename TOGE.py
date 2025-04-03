@@ -8,6 +8,8 @@ import numpy as np
 import scipy.signal
 import os
 
+versionNumber = "V0.1.2.20250403"
+
 class ResponsivePlot:
     def __init__(self, master):
         self.master = master
@@ -15,6 +17,13 @@ class ResponsivePlot:
         self._setup_layout()
         self._create_canvas()
         self._bind_events()
+        self.sync_all = False
+        self._updating = False
+        self.sync_indices = [True]*len(self.axes)
+
+        for ax in self.axes:
+            ax.callbacks.connect('xlim_changed', self._on_xlim_changed)
+            
 
     def _setup_layout(self):
         self.gs = GridSpec(3, 2, figure=self.figure,
@@ -26,8 +35,10 @@ class ResponsivePlot:
             self.gs[1, 0], self.gs[1, 1],
             self.gs[2, 0], self.gs[2, 1]
         ]]
-        for ax in self.axes[2:]:
-            ax.sharex(self.axes[0])
+
+        # share axes
+        #for ax in self.axes[2:]:
+        #    ax.sharex(self.axes[0])
 
     def _create_canvas(self):
         self.canvas = FigureCanvasTkAgg(self.figure, master=self.master)
@@ -37,6 +48,24 @@ class ResponsivePlot:
 
     def _bind_events(self):
         self.canvas.get_tk_widget().bind('<Configure>', self._on_resize)
+
+    def update_sync_indices(self, new_sync_list):
+        self.sync_indices = new_sync_list
+
+    def _on_xlim_changed(self, changed_ax):
+
+        if not self.sync_all or self._updating:
+            return
+        
+        self._updating = True
+        new_xlim = changed_ax.get_xlim()
+
+        for idx, ax in enumerate(self.axes):
+            if ax is not changed_ax and self.sync_indices[idx]:
+                ax.set_xlim(new_xlim)
+        self.canvas.draw_idle()
+        self._updating = False
+            
 
     def _on_resize(self, event):
         if event.width < 1000 or event.height < 700:
@@ -62,43 +91,47 @@ class ResponsivePlot:
         
         try:
             self.figure.tight_layout()
-        except:
+        except Exception:
             pass
         self.canvas.draw_idle()
 
     def update_plots(self, processor):
         plots_config = [
-            (0, "原始信号", [processor.ydata], {'color': '#39C5BB'}),
-            (1, "基线对比", 
+            (0, "Origin Signal", [processor.ydata], {'color': ['#39C5BB']}),
+            (1, "Baseline", 
              [processor.med_baseline, processor.ave_baseline],
-             {'labels': ['中值基线', '均值基线']}),
-            (2, "中值滤波", [processor.med_filt], {}),
-            (3, "均值滤波", [processor.ave_filt], {}),
-            (4, "中值处理流程", 
+             {'labels': ['Mid Baseline', 'Ave Baseline']}),
+            (2, "Med Filter", [processor.med_filt], {}),
+            (3, "Ave Filter", [processor.ave_filt], {}),
+            (4, "Med Processor", 
              [processor.med_filt, processor.med_savgol, processor.final_med],
-             {'alpha': [1, 0.6, 0.3]}),
-            (5, "均值处理流程", 
+             {'alpha': [0.3, 0.7, 1], 'color': ['#1772b4','#f17666', '#b7d07a']}),
+            (5, "Ave Processor", 
              [processor.ave_filt, processor.ave_savgol, processor.final_ave],
-             {'alpha': [1, 0.6, 0.3]})
+             {'alpha': [0.3, 0.7, 1], 'color': ['#1772b4','#f17666', '#b7d07a']})
         ]
 
         for idx, title, datasets, styles in plots_config:
             ax = self.axes[idx]
             ax.clear()
             ax.set_title(title, fontsize=10)
-            for i, data in enumerate(datasets):
-                alpha = styles.get('alpha', [1]*len(datasets))[i]
-                label = styles.get('labels', [None]*len(datasets))[i]
+
+            alpha_list = styles.get('alpha', [1]*len(datasets))
+            label_list = styles.get('labels', [None]*len(datasets))
+            color_list = styles.get('color', [None]*len(datasets))
+
+            for data, al, cl, ll in zip(datasets, alpha_list, color_list, label_list):
                 ax.plot(processor.xdata, data, 
-                       alpha=alpha, 
-                       label=label,
-                       linewidth=1 if idx>3 else 1.2)
-            if idx in [1,4,5]:
-                ax.legend(fontsize=8, loc='upper right')
-        
-        for ax in self.axes:
-            ax.relim()
+                       alpha=al, 
+                       label=ll,
+                       color=cl,
+                       linewidth=1 if idx > 3 else 1.2)
+            
+
+            ax.legend(fontsize=8, loc='best')
+            #ax.axvline()
             ax.autoscale_view()
+
         self.canvas.draw()
 
 class OptimizedProcessor:
@@ -203,7 +236,7 @@ class AdaptiveGUI:
         self.timer_id = None
 
     def _setup_main_window(self):
-        self.root.title("通山街数据处理器 v1.2")
+        self.root.title("TENG Data Processor " + versionNumber)
         self.root.geometry("1400x900")
         self.root.minsize(1200, 800)
         self.root.columnconfigure(0, weight=1)
@@ -227,11 +260,11 @@ class AdaptiveGUI:
     def _create_controls(self, parent):
         self.sliders = {}
         param_config = [
-            ('freq', "频率 (Hz)", 0.1, 8.0, 0.1),
-            ('sample_rate', "采样率", 50, 1000, 10),
-            ('window_size', "窗口大小", 5, 100, 1),
-            ('savgol_window', "SG 窗口", 5, 99, 2),
-            ('savgol_order', "SG 阶数", 1, 5, 1)
+            ('freq', "Frequency (Hz)", 0.1, 8.0, 0.1),
+            ('sample_rate', "Sample rate", 50, 1000, 10),
+            ('window_size', "Window size", 5, 100, 1),
+            ('savgol_window', "SG Window", 5, 99, 2),
+            ('savgol_order', "SG order", 1, 5, 1)
         ]
 
         for param, label_text, min_, max_, step in param_config:
@@ -259,6 +292,23 @@ class AdaptiveGUI:
             slider.pack(side='right', fill='x', expand=True)
             self.sliders[param] = (slider, entry)
 
+        self.sync_var = tk.BooleanVar()
+        sync_check = ttk.Checkbutton(parent, text="Sync x-limits across subplots",
+                                     variable=self.sync_var,
+                                     command=self._toggle_sync)
+        sync_check.pack(pady=5)
+
+        subplots_frame = ttk.LabelFrame(parent, text="Apply x-limit to subplots:")
+        subplots_frame.pack(fill='x', pady=5)
+        self.subplot_sync_vars = {}
+        for idx in range(len(self.plot_area.axes)):
+            var = tk.BooleanVar(value=True)
+            chk = ttk.Checkbutton(subplots_frame, text=f"Subplot {idx}", variable=var,
+                                   command=self._update_sync_indices)
+            chk.pack(anchor='w', padx=4)
+            self.subplot_sync_vars[idx] = var
+
+
         btn_frame = ttk.Frame(parent)
         btn_frame.pack(fill='x', pady=10)
         
@@ -268,8 +318,24 @@ class AdaptiveGUI:
         ttk.Button(btn_frame, text="保存数据", command=self._save_data).pack(fill='x', pady=3)
         ttk.Button(btn_frame, text="退出程序", command=self._safe_exit).pack(fill='x', pady=3)
 
+    def _update_sync_indices(self):
+        new_sync = [self.subplot_sync_vars[idx].get() for idx in range(len(self.plot_area.axes))]
+        self.plot_area.update_sync_indices(new_sync)
+    def _toggle_sync(self):
+        self.plot_area.sync_all = self.sync_var.get()
+        if self.plot_area.sync_all:
+
+            
+            xlim = self.plot_area.axes[0].get_xlim()
+            self.plot_area._updating = True
+            for idx, ax in enumerate(self.plot_area.axes):
+                if self.subplot_sync_vars[idx].get():
+                    ax.set_xlim(xlim)
+            self.plot_area._updating = False
+            self.plot_area.canvas.draw_idle()
+
     def _on_param_change(self, param, value):
-        """新增参数变更处理方法"""
+        
         if self.timer_id:
             self.root.after_cancel(self.timer_id)
         self.timer_id = self.root.after(500, self._recalculate)
@@ -292,7 +358,7 @@ class AdaptiveGUI:
             entry.insert(0, f"{int(float(value))}")
 
     def _open_file(self):
-        filename = filedialog.askopenfilename(filetypes=[("CSV文件", "*.csv")])
+        filename = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
         if filename and self.processor.load_data(filename):
             self.processor.process_data()
             self.plot_area.update_plots(self.processor)
@@ -330,14 +396,14 @@ class AdaptiveGUI:
 
         if messagebox.askyesno("保存方式", "是否覆盖原始文件？"):
             filename = filedialog.askopenfilename(
-                filetypes=[("CSV文件", "*.csv")],
+                filetypes=[("CSV files", "*.csv")],
                 title="选择要覆盖的原始文件"
             )
         else:
             default_name = "processed_" + self.processor.data.attrs.get('filename', 'data.csv')
             filename = filedialog.asksaveasfilename(
                 defaultextension=".csv",
-                filetypes=[("CSV文件", "*.csv")],
+                filetypes=[("CSV files", "*.csv")],
                 initialfile=default_name
             )
 
