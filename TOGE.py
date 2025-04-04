@@ -7,8 +7,43 @@ from matplotlib.gridspec import GridSpec
 import numpy as np
 import scipy.signal
 import os
+from scipy.interpolate import UnivariateSpline
 
-versionNumber = "V0.1.2.20250403"
+versionNumber = "V0.1.3.20250404"
+
+
+def compute_envelope(signal, x, smoothing_factor=None):
+    valid = np.isfinite(signal)
+    if not np.any(valid):
+        return np.full_like(x, np.nan), np.full_like(x, np.nan), np.full_like(x, np.nan)
+
+    default_s = None
+
+    peaks = scipy.signal.find_peaks(signal)[0]
+    if len(peaks) < 2:
+        upper = np.interp(x, x[valid], signal[valid])
+    else:
+        if smoothing_factor is None:
+            default_s = 0.1 * len(peaks)
+        else:
+            default_s = smoothing_factor
+        spline_upper = UnivariateSpline(x[peaks], signal[peaks], s=default_s)
+        upper = spline_upper(x)
+
+    throughs = scipy.signal.find_peaks(-signal)[0]
+
+    if len(throughs) < 2:
+        lower = np.interp(x, x[valid], signal[valid])
+    else:
+        if smoothing_factor is None:
+            default_s = 0.1 * len(throughs)
+        else:
+            default_s = smoothing_factor
+        spline_lower = UnivariateSpline(x[throughs], signal[throughs], s=default_s)
+        lower = spline_lower(x)
+
+    diff = upper - lower
+    return upper, lower, diff
 
 class ResponsivePlot:
     def __init__(self, master):
@@ -196,6 +231,57 @@ class ResponsivePlot:
         ax_ave.axvline(x=dom_freq_ave, color='#f17666', linestyle='--', linewidth=1, alpha=0.8, label=f"Dom Freq: {dom_freq_ave:.2f} Hz")
         ax_ave.legend(fontsize=8, loc='best')
 
+# modified later
+class EnvelopePlot:
+    def __init__(self, master):
+        self.master = master
+        self.figure = plt.figure(figsize=(10,8), dpi=100)
+        self._setup_layout()
+        self._create_canvas()
+
+    def _setup_layout(self):
+        self.axes = [self.figure.add_subplot(4, 1, i+1) for i in range(4)]
+    
+        
+    def _create_canvas(self):
+        self.canvas = FigureCanvasTkAgg(self.figure, master=self.master)
+        self.toolbar = NavigationToolbar2Tk(self.canvas, self.master, pack_toolbar=False)
+        self.toolbar.grid(row=0, column=0, sticky='ew')
+        self.canvas.get_tk_widget().grid(row=1, column=0, sticky='nsew')
+        
+        
+    def update_plots(self, processor):
+        x = processor.xdata
+
+        up_med, low_med, diff_med = compute_envelope(processor.med_filt, x)
+        up_ave, low_ave, diff_ave = compute_envelope(processor.ave_filt, x)
+
+        self.axes[0].clear()
+        self.axes[0].plot(x[processor.trim:len(x)-processor.trim], up_med[processor.trim:len(x)-processor.trim], 'b--', label='Upper Envelope')
+        self.axes[0].plot(x[processor.trim:len(x)-processor.trim], low_med[processor.trim:len(x)-processor.trim], 'g--', label='Lower Envelope')
+        self.axes[0].plot(x[processor.trim:len(x)-processor.trim], diff_med[processor.trim:len(x)-processor.trim], 'r-', label='Difference')
+        self.axes[0].set_title("Envelope of Med Filter")
+        self.axes[0].legend(fontsize=8)
+
+        self.axes[1].clear()
+        self.axes[1].plot(x[processor.trim:len(x)-processor.trim], up_ave[processor.trim:len(x)-processor.trim], 'b--', label='Upper Envelope')
+        self.axes[1].plot(x[processor.trim:len(x)-processor.trim], low_ave[processor.trim:len(x)-processor.trim], 'g--', label='Lower Envelope')
+        self.axes[1].plot(x[processor.trim:len(x)-processor.trim], diff_ave[processor.trim:len(x)-processor.trim], 'r-', label='Difference')
+        self.axes[1].set_title("Envelope of Ave Filter")
+        self.axes[1].legend(fontsize=8)
+
+        self.axes[2].clear()
+        self.axes[2].plot(x[processor.trim:len(x)-processor.trim], diff_med[processor.trim:len(x)-processor.trim], 'r-', label='Difference')
+        self.axes[2].set_title("Envelope of Med Filter")
+        self.axes[2].legend(fontsize=8)
+
+        self.axes[3].clear()
+        self.axes[3].plot(x[processor.trim:len(x)-processor.trim], diff_ave[processor.trim:len(x)-processor.trim], 'r-', label='Difference')
+        self.axes[3].set_title("Envelope of Ave Filter")
+        self.axes[3].legend(fontsize=8)
+
+        self.canvas.draw()
+
 
 class OptimizedProcessor:
     def __init__(self):
@@ -325,9 +411,22 @@ class AdaptiveGUI:
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(0, weight=1)
 
-        plot_frame = ttk.Frame(main_frame)
-        plot_frame.grid(row=0, column=0, sticky='nsew')
-        self.plot_area = ResponsivePlot(plot_frame)
+        self.notebook = ttk.Notebook(main_frame)
+        self.notebook.grid(row=0, column=0, sticky='nsew')
+
+        main_plots_frame = ttk.Frame(self.notebook)
+        self.notebook.add(main_plots_frame, text="Main Plots")
+        self.plot_area = ResponsivePlot(main_plots_frame)
+
+        envelope_plots_frame = ttk.Frame(self.notebook)
+        self.notebook.add(envelope_plots_frame, text="Envelope Plots")
+        self.envelope_plot = EnvelopePlot(envelope_plots_frame)
+
+
+
+        #plot_frame = ttk.Frame(main_frame)
+        #plot_frame.grid(row=0, column=0, sticky='nsew')
+        #self.plot_area = ResponsivePlot(plot_frame)
         
         control_frame = ttk.LabelFrame(main_frame, text="Control Panel")
         control_frame.grid(row=0, column=1, sticky='nsew', padx=5, pady=5)
@@ -444,6 +543,7 @@ class AdaptiveGUI:
             self.file_label.config(text=f"File: {self.processor.data.attrs['filename']}")
             self.processor.process_data()
             self.plot_area.update_plots(self.processor)
+            self.envelope_plot.update_plots(self.processor)
 
     def _recalculate(self):
         params = {
@@ -462,6 +562,7 @@ class AdaptiveGUI:
         if self.processor.data is not None:
             self.processor.process_data()
             self.plot_area.update_plots(self.processor)
+            self.envelope_plot.update_plots(self.processor)
 
     def _save_image(self):
         filename = filedialog.asksaveasfilename(
