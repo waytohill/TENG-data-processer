@@ -26,14 +26,15 @@ class ResponsivePlot:
             
 
     def _setup_layout(self):
-        self.gs = GridSpec(3, 2, figure=self.figure,
+        self.gs = GridSpec(4, 2, figure=self.figure,
                           left=0.1, right=0.98,
                           bottom=0.1, top=0.95,
                           hspace=0.5, wspace=0.3)
         self.axes = [self.figure.add_subplot(pos) for pos in [
             self.gs[0, 0], self.gs[0, 1],
             self.gs[1, 0], self.gs[1, 1],
-            self.gs[2, 0], self.gs[2, 1]
+            self.gs[2, 0], self.gs[2, 1],
+            self.gs[3, 0], self.gs[3, 1]
         ]]
 
         # share axes
@@ -131,8 +132,70 @@ class ResponsivePlot:
             ax.legend(fontsize=8, loc='best')
             #ax.axvline()
             ax.autoscale_view()
-
+        
+        # merged into plots_config
+        self.update_fft_plots(processor)
         self.canvas.draw()
+    
+    def update_fft_plots(self, processor):
+        sample_rate = processor.params['sample_rate'][0]
+
+        valid_idx = np.where(np.isfinite(processor.final_med))[0]
+        if len(valid_idx) == 0:
+            return
+        
+        start_idx = valid_idx[0]
+        end_idx = valid_idx[-1] + 1
+
+        valid_final_med = processor.final_med[start_idx:end_idx]
+        valid_final_ave = processor.final_ave[start_idx:end_idx]
+        N = len(valid_final_med)
+
+        if N == 0:
+            return
+
+        fft_med = np.fft.fft(valid_final_med)
+        fft_ave = np.fft.fft(valid_final_ave)
+
+        freq = np.fft.fftfreq(N, d=1.0/sample_rate)
+
+        pos_mask = freq >= 0
+        freq_pos = freq[pos_mask]
+        fft_med_pos = np.abs(fft_med)[pos_mask]
+        fft_ave_pos = np.abs(fft_ave)[pos_mask]
+
+        if len(fft_med_pos) > 1:
+            idx_med = np.argmax(fft_med_pos[1:]) + 1
+        else:
+            idx_med = 0
+
+        dom_freq_med = freq_pos[idx_med]
+
+        if len(fft_ave_pos) > 1:
+            idx_ave = np.argmax(fft_ave_pos[1:]) + 1
+        else:
+            idx_ave = 0
+        
+        dom_freq_ave = freq_pos[idx_ave]
+
+        ax_med = self.axes[6]
+        ax_med.clear()
+        ax_med.plot(freq_pos, fft_med_pos, color='#a4aca7')
+        ax_med.set_title("FFT of Final Med", fontsize=10)
+        ax_med.set_xlabel("Frequency (Hz)")
+        ax_med.set_ylabel("Amplitude")
+        ax_med.axvline(x=dom_freq_med, color='#f9cb8b', linestyle='--', linewidth=1, alpha = 0.8, label=f"Dom Freq: {dom_freq_med:.2f} Hz")
+        ax_med.legend(fontsize=8, loc='best')
+
+        ax_ave = self.axes[7]
+        ax_ave.clear()
+        ax_ave.plot(freq_pos, fft_ave_pos, color='#b5aa90')
+        ax_ave.set_title("FFT of Final Ave", fontsize=10)
+        ax_ave.set_xlabel("Frequency (Hz)")
+        ax_ave.set_ylabel("Amplitude")
+        ax_ave.axvline(x=dom_freq_ave, color='#f17666', linestyle='--', linewidth=1, alpha=0.8, label=f"Dom Freq: {dom_freq_ave:.2f} Hz")
+        ax_ave.legend(fontsize=8, loc='best')
+
 
 class OptimizedProcessor:
     def __init__(self):
@@ -168,6 +231,7 @@ class OptimizedProcessor:
             messagebox.showerror("错误", f"文件读取失败: {str(e)}")
             return False
 
+    """need to be modified"""
     def _preprocess_data(self):
         if 'time' not in self.data.columns:
             self.data.insert(0, 'time', np.arange(len(self.data)) * 0.002)
@@ -188,6 +252,18 @@ class OptimizedProcessor:
         self.ave_baseline = np.convolve(self.ydata, window, 'same')
         self.med_filt = self.ydata - self.med_baseline
         self.ave_filt = self.ydata - self.ave_baseline
+
+        half_k = kernel_size // 2
+
+        self.med_filt[:half_k] = np.nan
+        self.med_filt[-half_k:] = np.nan
+        self.ave_filt[:half_k] = np.nan
+        self.ave_filt[-half_k:] = np.nan
+
+        self.trim = half_k
+
+        
+
         self.med_savgol = scipy.signal.savgol_filter(
             self.med_filt, 
             savgol_window,
@@ -255,6 +331,11 @@ class AdaptiveGUI:
         
         control_frame = ttk.LabelFrame(main_frame, text="Control Panel")
         control_frame.grid(row=0, column=1, sticky='nsew', padx=5, pady=5)
+
+        self.file_label = ttk.Label(control_frame, text="File: N/A")
+        self.file_label.pack(fill='x', pady=4)
+
+
         self._create_controls(control_frame)
 
     def _create_controls(self, parent):
@@ -360,6 +441,7 @@ class AdaptiveGUI:
     def _open_file(self):
         filename = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
         if filename and self.processor.load_data(filename):
+            self.file_label.config(text=f"File: {self.processor.data.attrs['filename']}")
             self.processor.process_data()
             self.plot_area.update_plots(self.processor)
 
