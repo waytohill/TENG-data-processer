@@ -7,43 +7,12 @@ from matplotlib.gridspec import GridSpec
 import numpy as np
 import scipy.signal
 import os
-from scipy.interpolate import UnivariateSpline
+from scipy.interpolate import UnivariateSpline, interp1d
 
-versionNumber = "V0.1.3.20250404"
+versionNumber = "V0.1.4.20250407"
 
 
-def compute_envelope(signal, x, smoothing_factor=None):
-    valid = np.isfinite(signal)
-    if not np.any(valid):
-        return np.full_like(x, np.nan), np.full_like(x, np.nan), np.full_like(x, np.nan)
 
-    default_s = None
-
-    peaks = scipy.signal.find_peaks(signal)[0]
-    if len(peaks) < 2:
-        upper = np.interp(x, x[valid], signal[valid])
-    else:
-        if smoothing_factor is None:
-            default_s = 0.1 * len(peaks)
-        else:
-            default_s = smoothing_factor
-        spline_upper = UnivariateSpline(x[peaks], signal[peaks], s=default_s)
-        upper = spline_upper(x)
-
-    throughs = scipy.signal.find_peaks(-signal)[0]
-
-    if len(throughs) < 2:
-        lower = np.interp(x, x[valid], signal[valid])
-    else:
-        if smoothing_factor is None:
-            default_s = 0.1 * len(throughs)
-        else:
-            default_s = smoothing_factor
-        spline_lower = UnivariateSpline(x[throughs], signal[throughs], s=default_s)
-        lower = spline_lower(x)
-
-    diff = upper - lower
-    return upper, lower, diff
 
 class ResponsivePlot:
     def __init__(self, master):
@@ -233,6 +202,46 @@ class ResponsivePlot:
 
 # modified later
 class EnvelopePlot:
+
+    def compute_envelope(self, signal, x, smoothing_factor=None):
+        valid = np.isfinite(signal)
+        if not np.any(valid):
+            return np.full_like(x, np.nan), np.full_like(x, np.nan), np.full_like(x, np.nan)
+
+        default_s = None
+
+        peaks = scipy.signal.find_peaks(signal)[0]
+        if len(peaks) < 2:
+            upper = np.interp(x, x[valid], signal[valid])
+        else:
+            if smoothing_factor is None:
+                default_s = 0.1 * len(peaks)
+            else:
+                default_s = smoothing_factor
+            spline_upper = UnivariateSpline(x[peaks], signal[peaks], s=default_s)
+            upper = spline_upper(x)
+
+        throughs = scipy.signal.find_peaks(-signal)[0]
+
+        if len(throughs) < 2:
+            lower = np.interp(x, x[valid], signal[valid])
+        else:
+            if smoothing_factor is None:
+                default_s = 0.1 * len(throughs)
+            else:
+                default_s = smoothing_factor
+            spline_lower = UnivariateSpline(x[throughs], signal[throughs], s=default_s)
+            lower = spline_lower(x)
+
+        diff = upper - lower
+        return upper, lower, diff
+    
+    def compute_contour(self, signal, x):
+
+        con_diff = signal
+        return con_diff
+
+        
     def __init__(self, master):
         self.master = master
         self.figure = plt.figure(figsize=(10,8), dpi=100)
@@ -253,9 +262,10 @@ class EnvelopePlot:
     def update_plots(self, processor):
         x = processor.xdata
 
-        up_med, low_med, diff_med = compute_envelope(processor.med_filt, x)
-        up_ave, low_ave, diff_ave = compute_envelope(processor.ave_filt, x)
-
+        up_med, low_med, diff_med = self.compute_envelope(processor.med_filt, x)
+        up_ave, low_ave, diff_ave = self.compute_envelope(processor.ave_filt, x)
+        con_diff_med = self.compute_contour(processor.med_filt, x)
+        
         self.axes[0].clear()
         self.axes[0].plot(x[processor.trim:len(x)-processor.trim], up_med[processor.trim:len(x)-processor.trim], 'b--', label='Upper Envelope')
         self.axes[0].plot(x[processor.trim:len(x)-processor.trim], low_med[processor.trim:len(x)-processor.trim], 'g--', label='Lower Envelope')
@@ -270,6 +280,7 @@ class EnvelopePlot:
         self.axes[1].set_title("Envelope of Ave Filter")
         self.axes[1].legend(fontsize=8)
 
+        """ diff only
         self.axes[2].clear()
         self.axes[2].plot(x[processor.trim:len(x)-processor.trim], diff_med[processor.trim:len(x)-processor.trim], 'r-', label='Difference')
         self.axes[2].set_title("Envelope of Med Filter")
@@ -279,6 +290,11 @@ class EnvelopePlot:
         self.axes[3].plot(x[processor.trim:len(x)-processor.trim], diff_ave[processor.trim:len(x)-processor.trim], 'r-', label='Difference')
         self.axes[3].set_title("Envelope of Ave Filter")
         self.axes[3].legend(fontsize=8)
+        """
+        self.axes[2].clear()
+        self.axes[2].plot(x, con_diff_med, 'r-', label='Difference')
+        self.axes[2].set_title("Envelope of Med Filter")
+        self.axes[2].legend(fontsize=8)
 
         self.canvas.draw()
 
