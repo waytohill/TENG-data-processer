@@ -8,6 +8,9 @@ import numpy as np
 import scipy.signal
 import os
 from scipy.interpolate import UnivariateSpline, interp1d
+from scipy.ndimage import grey_closing
+import pywt
+
 
 versionNumber = "V0.1.4.20250407"
 
@@ -320,7 +323,8 @@ class OptimizedProcessor:
             'sample_rate': (500, 50, 1000),
             'window_size': (20, 5, 100),
             'savgol_window': (53, 5, 99),
-            'savgol_order': (3, 1, 5)
+            'savgol_order': (3, 1, 5),
+            'structure_size': (100, 10, 1000)
         }
 
     def load_data(self, filename):
@@ -340,14 +344,44 @@ class OptimizedProcessor:
         self.xdata = self.data['time'].values
         self.ydata = self.data.iloc[:, 1].values.astype(np.float64)
 
+    def notch_filter(self, signal, fs=500, freq=50, Q=30):
+        nyq = 0.5 * fs
+        freq_normalized = freq / nyq
+        b, a = scipy.signal.iirnotch(freq_normalized, Q)
+        return scipy.signal.filtfilt(b, a, signal)
+    
+    def advanced_wavelet_denoise(self, signal, wavelet='db8', level=5):
+        coeffs = pywt.wavedec(signal, wavelet, level=level)
+        sigma = np.median(np.abs(coeffs[-1])) / 0.6745
+        thresholds = [sigma * np.sqrt(2 * np.log(len(signal)))] * len(coeffs)
+        thresholds[0] = 0
+        coeffs = [pywt.threshold(c, t, mode='soft') for c, t in zip(coeffs, thresholds)]
+        return pywt.waverec(coeffs, wavelet)
+
+
     def process_data(self):
         kernel_size = int(self.params['freq'][0] * self.params['sample_rate'][0]) + 1
         window_size = int(self.params['window_size'][0])
         savgol_window = int(self.params['savgol_window'][0])
         savgol_order = int(self.params['savgol_order'][0])
+        structure_size = int(self.params['structure_size'][0])
+
+        smooth_window = np.ones(window_size)/window_size
         
         kernel_size = kernel_size + 1 if kernel_size % 2 == 0 else kernel_size
         savgol_window = savgol_window + 1 if savgol_window % 2 == 0 else savgol_window
+
+        self.morphology_baseline = grey_closing(self.ydata, structure=np.ones(structure_size))
+        self.morphology_filt = -(self.ydata - self.morphology_baseline)
+        self.denoised_data1 = self.notch_filter(self.morphology_filt)
+        self.denoised_data2 = self.advanced_wavelet_denoise(self.denoised_data1)
+        self.final_sav = scipy.signal.savgol_filter(
+            self.denoised_data2,
+            savgol_window,
+            savgol_order,
+            mode='nearest'
+        )
+        self.final_sav_ave = np.convolve(self.final_sav, smooth_window, 'same')
 
         self.med_baseline = scipy.signal.medfilt(self.ydata, kernel_size)
         window = np.ones(kernel_size)/kernel_size
@@ -378,7 +412,7 @@ class OptimizedProcessor:
             savgol_order,
             mode='nearest'
         )
-        smooth_window = np.ones(window_size)/window_size
+        
         self.final_med = np.convolve(self.med_savgol, smooth_window, 'same')
         self.final_ave = np.convolve(self.ave_savgol, smooth_window, 'same')
         
@@ -460,7 +494,8 @@ class AdaptiveGUI:
             ('sample_rate', "Sample rate", 50, 1000, 10),
             ('window_size', "Window size", 5, 100, 1),
             ('savgol_window', "SG Window", 5, 99, 2),
-            ('savgol_order', "SG order", 1, 5, 1)
+            ('savgol_order', "SG order", 1, 5, 1),
+            ('structure_size', "Structure size", 10, 1000, 10)
         ]
 
         for param, label_text, min_, max_, step in param_config:
