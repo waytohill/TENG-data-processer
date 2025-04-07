@@ -10,15 +10,13 @@ from scipy.ndimage import grey_closing
 from scipy.signal import iirnotch, filtfilt
 from scipy.fft import fft, fftfreq
 import pywt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import os
-
 
 window_length = 53
 kvalue = 3
 windowsize = 20
 sample_rate = 500
-
 
 def moving_ave(data, windowsize):
     window = np.ones(int(windowsize))/float(windowsize)
@@ -55,7 +53,6 @@ def vibration_detect(ydata):
     dominant_frequency = positive_freqs[np.argmax(positive_magnitude)]
     return dominant_frequency, positive_freqs, positive_magnitude
 
-
 def plot_all(xdata, ydata, filename):
     fig = plt.figure(figsize=(12, 8))
     gs = gridspec.GridSpec(3, 2)
@@ -74,8 +71,8 @@ def plot_all(xdata, ydata, filename):
     ax1.set_title('Origin')
 
     ax11 = fig.add_subplot(gs[0, 1])
-    ax11.plot(xdata, ydata_denoise2 - np.mean(ydata_denoise2))
-    ax11.set_title("Denoised2 (DC removed)")
+    ax11.plot(xdata, ydata_morphology)
+    ax11.set_title("ydata_morphology")
 
     ax2 = fig.add_subplot(gs[1, 0])
     ax2.plot(xdata, ydata_denoise2)
@@ -98,8 +95,62 @@ def plot_all(xdata, ydata, filename):
     fig.tight_layout()
     return fig
 
+def bind_interaction(canvas):
+    drag_data = {"x": 0, "y": 0, "is_dragging": False}
+
+    def on_scroll(event):
+        ax = event.inaxes
+        if ax is None: return
+        scale_factor = 1.2 if event.button == 'up' else 0.8
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+        xdata = event.xdata
+        ydata = event.ydata
+        new_xlim = [xdata + (x - xdata) * scale_factor for x in xlim]
+        new_ylim = [ydata + (y - ydata) * scale_factor for y in ylim]
+        ax.set_xlim(new_xlim)
+        ax.set_ylim(new_ylim)
+        canvas.draw()
+
+    def on_press(event):
+        if event.button == 3:
+            drag_data["x"] = event.x
+            drag_data["y"] = event.y
+            drag_data["is_dragging"] = True
+
+    def on_release(event):
+        drag_data["is_dragging"] = False
+
+    def on_motion(event):
+        if drag_data["is_dragging"] and event.inaxes:
+            dx = event.x - drag_data["x"]
+            dy = event.y - drag_data["y"]
+            ax = event.inaxes
+            xlim = ax.get_xlim()
+            ylim = ax.get_ylim()
+            dx_unit = dx * (xlim[1] - xlim[0]) / canvas.get_width()
+            dy_unit = dy * (ylim[1] - ylim[0]) / canvas.get_height()
+            ax.set_xlim(xlim[0] - dx_unit, xlim[1] - dx_unit)
+            ax.set_ylim(ylim[0] + dy_unit, ylim[1] + dy_unit)
+            drag_data["x"] = event.x
+            drag_data["y"] = event.y
+            canvas.draw()
+
+    def on_double_click(event):
+        if event.dblclick and event.inaxes:
+            ax = event.inaxes
+            ax.autoscale()
+            canvas.draw()
+
+    canvas.mpl_connect("scroll_event", on_scroll)
+    canvas.mpl_connect("button_press_event", on_press)
+    canvas.mpl_connect("button_release_event", on_release)
+    canvas.mpl_connect("motion_notify_event", on_motion)
+    canvas.mpl_connect("button_press_event", on_double_click)
 
 def load_and_plot():
+    global canvas, toolbar
+
     filename = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
     if not filename:
         return
@@ -110,14 +161,26 @@ def load_and_plot():
         ydata = data.iloc[:, 1]
 
         fig = plot_all(xdata, ydata, filename)
-        canvas.figure = fig
+
+        # 移除旧图像并重新构建 canvas
+        canvas.get_tk_widget().pack_forget()
+        toolbar.pack_forget()
+
+        canvas = FigureCanvasTkAgg(fig, master=frame_plot)
+        toolbar = NavigationToolbar2Tk(canvas, frame_plot, pack_toolbar=False)
+        toolbar.update()
+        toolbar.pack(side=tk.TOP, fill=tk.X)
+
         canvas.draw()
+        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        bind_interaction(canvas)
 
         label_filename.config(text=f"Loaded: {os.path.basename(filename)}")
     except Exception as e:
         label_filename.config(text=f"Error: {str(e)}")
 
-
+# GUI 初始化
 root = tk.Tk()
 root.title("CSV Signal Viewer")
 
@@ -135,6 +198,13 @@ frame_plot.pack()
 
 fig_placeholder = plt.figure(figsize=(12, 8))
 canvas = FigureCanvasTkAgg(fig_placeholder, master=frame_plot)
-canvas.get_tk_widget().pack()
+toolbar = NavigationToolbar2Tk(canvas, frame_plot, pack_toolbar=False)
+toolbar.update()
+toolbar.pack(side=tk.TOP, fill=tk.X)
+
+canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+canvas.draw()
+
+bind_interaction(canvas)
 
 root.mainloop()
