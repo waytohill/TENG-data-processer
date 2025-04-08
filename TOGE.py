@@ -19,7 +19,14 @@ versionNumber = "V0.1.4.20250407"
 
 class ResponsivePlot:
     def __init__(self, master):
+
+
         self.master = master
+        self.spectrum_mode_mono = None
+        self.spectrum_mode_ave = None
+
+
+        
         self.figure = plt.figure(figsize=(10, 8), dpi=100)
         self._setup_layout()
         self._create_canvas()
@@ -27,6 +34,7 @@ class ResponsivePlot:
         self.sync_all = False
         self._updating = False
         self.sync_indices = [True]*len(self.axes)
+        self.colorbars = []
 
         for ax in self.axes:
             ax.callbacks.connect('xlim_changed', self._on_xlim_changed)
@@ -105,18 +113,18 @@ class ResponsivePlot:
 
     def update_plots(self, processor):
         plots_config = [
-            (0, "Origin Signal", [processor.ydata], {'color': ['#39C5BB']}),
+            (0, "Origin Signal", [processor.ydata], {'color': ['#39C5BB'], 'labels': ['Origin Signal']}),
             (1, "Baseline", 
              [processor.morphology_baseline, processor.ave_baseline],
              {'labels': ['Morphology Baseline', 'Ave Baseline']}),
-            (2, "Morphology Filter", [processor.morphology_filt], {}),
-            (3, "Ave Filter", [processor.ave_filt], {}),
+            (2, "Morphology Filter", [processor.morphology_filt], {'labels': ['Morphology Filter']}),
+            (3, "Ave Filter", [processor.ave_filt], {'labels': ['Ave Filter']}),
             (4, "Morphology Processor", 
              [processor.denoised_data1, processor.denoised_data2, processor.final_sav_ave],
-             {'alpha': [0.3, 0.7, 1], 'color': ['#1772b4','#f17666', '#b7d07a']}),
+             {'alpha': [0.3, 0.7, 1], 'color': ['#1772b4','#f17666', '#b7d07a'], 'labels': ['Denoised data1', 'Denoised data2', 'Final MONO']}),
             (5, "Ave Processor", 
              [processor.ave_filt, processor.ave_savgol, processor.final_ave],
-             {'alpha': [0.3, 0.7, 1], 'color': ['#1772b4','#f17666', '#b7d07a']})
+             {'alpha': [0.3, 0.7, 1], 'color': ['#1772b4','#f17666', '#b7d07a'], 'labels': ['Ave filt', 'Ave savgol', 'Final Ave']})
         ]
 
         for idx, title, datasets, styles in plots_config:
@@ -154,8 +162,67 @@ class ResponsivePlot:
         start_idx = valid_idx[0]
         end_idx = valid_idx[-1] + 1
 
-        valid_final_sav_ave = processor.final_sav_ave[start_idx:end_idx]
-        valid_final_ave = processor.final_ave[start_idx:end_idx]
+        sig_final_sav_ave = processor.final_sav_ave[start_idx:end_idx]
+        sig_final_ave = processor.final_ave[start_idx:end_idx]
+
+        for cbar in self.colorbars:
+            cbar.remove()
+        self.colorbars.clear()
+
+        def plot_spectrum(ax, signal, fs, mode, title, color):
+            signal = signal - np.mean(signal)
+            N = len(signal)
+            if N < 32:
+                return
+            
+            ax.clear()
+            
+            
+
+            if mode == 'FFT':
+                fft_vals = np.fft.fft(signal)
+                freqs = np.fft.fftfreq(N, d=1.0/fs)
+                pos_mask = freqs >= 0
+                ax.plot(freqs[pos_mask], np.abs(fft_vals)[pos_mask], color=color)
+                ax.set_title(f"{title} - FFT")
+                ax.set_xlabel("Frequency (Hz)")
+                ax.set_ylabel("Amplitude")
+            elif mode == 'STFT':
+                f, t, Zxx = scipy.signal.stft(signal, fs=fs, nperseg=256)
+                im = ax.pcolormesh(t, f, np.abs(Zxx), shading='gouraud', cmap='viridis')
+                ax.set_title(f"{title} - STFT")
+                ax.set_xlabel("Time (s)")
+                ax.set_ylabel("Frequency (Hz)")
+                
+                cbar = self.figure.colorbar(im, ax=ax, orientation='vertical', label='Amp')
+                self.colorbars.append(cbar)
+                
+            elif mode == 'CWT':
+                widths = np.arange(1, 128)
+                cwtmatr = scipy.signal.cwt(signal, scipy.signal.morlet2, widths, w=6)
+                time_axis = np.linspace(0, N/fs, N)
+                im =ax.imshow(np.abs(cwtmatr), extent=[0, time_axis[-1], 1, 128],
+                              cmap='jet', aspect='auto', origin='lower')
+                ax.set_title(f"{title} - CWT")
+                
+                ax.set_xlabel("Time (s)")
+                ax.set_ylabel("Scale")
+                
+                cbar = self.figure.colorbar(im, ax=ax, orientation='vertical', label='Amp')
+                self.colorbars.append(cbar)
+
+        plot_spectrum(self.axes[6], sig_final_sav_ave, sample_rate, self.spectrum_mode_mono.get(), "Final MONO", '#a4aca7')
+
+        plot_spectrum(self.axes[7], sig_final_ave, sample_rate, self.spectrum_mode_ave.get(), "Final Ave", '#b5aa90')
+
+        self.canvas.draw()
+
+
+        """
+        valid_final_sav_ave = valid_final_sav_ave - np.mean(valid_final_sav_ave)
+        valid_final_ave = valid_final_ave - np.mean(valid_final_ave)
+
+
         N = len(valid_final_sav_ave)
 
         if N == 0:
@@ -202,6 +269,7 @@ class ResponsivePlot:
         ax_ave.set_ylabel("Amplitude")
         ax_ave.axvline(x=dom_freq_ave, color='#f17666', linestyle='--', linewidth=1, alpha=0.8, label=f"Dom Freq: {dom_freq_ave:.2f} Hz")
         ax_ave.legend(fontsize=8, loc='best')
+        """
 
 # modified later
 class EnvelopePlot:
@@ -454,6 +522,9 @@ class AdaptiveGUI:
         self._setup_main_window()
         self._create_widgets()
         self.timer_id = None
+        self.plot_area.spectrum_mode_mono = self.spectrum_mode_mono
+        self.plot_area.spectrum_mode_ave = self.spectrum_mode_ave
+
 
     def _setup_main_window(self):
         self.root.title("TENG Data Processor " + versionNumber)
@@ -550,6 +621,27 @@ class AdaptiveGUI:
 
         btn_frame = ttk.Frame(parent)
         btn_frame.pack(fill='x', pady=10)
+
+
+        spectrum_mode_frame = ttk.LabelFrame(parent, text="Frequency Analysis Mode")
+        spectrum_mode_frame.pack(fill='x', pady=10)
+
+        self.spectrum_mode_mono = tk.StringVar(value='FFT')
+        self.spectrum_mode_ave = tk.StringVar(value='FFT')
+        mode_options = ['FFT', 'STFT', 'CWT']
+
+        frame_sav = ttk.Frame(spectrum_mode_frame)
+        frame_sav.pack(fill='x', pady=2)
+        ttk.Label(frame_sav, text="Final MONO Mode:").pack(side='left', padx=4)
+        ttk.OptionMenu(frame_sav, self.spectrum_mode_mono, 'FFT', *mode_options,
+                       command=lambda _: self.plot_area.update_fft_plots(self.processor)).pack(side='left')
+
+        frame_ave = ttk.Frame(spectrum_mode_frame)
+        frame_ave.pack(fill='x', pady=2)
+        ttk.Label(frame_ave, text="Final AVE Mode:").pack(side='left', padx=4)
+        ttk.OptionMenu(frame_ave, self.spectrum_mode_ave, 'FFT', *mode_options,
+                       command=lambda _: self.plot_area.update_fft_plots(self.processor)).pack(side='left')
+
         
         ttk.Button(btn_frame, text="打开文件", command=self._open_file).pack(fill='x', pady=3)
         ttk.Button(btn_frame, text="重新计算", command=self._recalculate).pack(fill='x', pady=3)
