@@ -8,7 +8,7 @@ import numpy as np
 import scipy.signal
 import os
 from scipy.interpolate import UnivariateSpline, interp1d
-from scipy.ndimage import grey_closing
+from scipy.ndimage import grey_closing, grey_opening
 import pywt
 
 
@@ -107,12 +107,12 @@ class ResponsivePlot:
         plots_config = [
             (0, "Origin Signal", [processor.ydata], {'color': ['#39C5BB']}),
             (1, "Baseline", 
-             [processor.med_baseline, processor.ave_baseline],
-             {'labels': ['Mid Baseline', 'Ave Baseline']}),
-            (2, "Med Filter", [processor.med_filt], {}),
+             [processor.morphology_baseline, processor.ave_baseline],
+             {'labels': ['Morphology Baseline', 'Ave Baseline']}),
+            (2, "Morphology Filter", [processor.morphology_filt], {}),
             (3, "Ave Filter", [processor.ave_filt], {}),
-            (4, "Med Processor", 
-             [processor.med_filt, processor.med_savgol, processor.final_med],
+            (4, "Morphology Processor", 
+             [processor.denoised_data1, processor.denoised_data2, processor.final_sav_ave],
              {'alpha': [0.3, 0.7, 1], 'color': ['#1772b4','#f17666', '#b7d07a']}),
             (5, "Ave Processor", 
              [processor.ave_filt, processor.ave_savgol, processor.final_ave],
@@ -147,36 +147,36 @@ class ResponsivePlot:
     def update_fft_plots(self, processor):
         sample_rate = processor.params['sample_rate'][0]
 
-        valid_idx = np.where(np.isfinite(processor.final_med))[0]
+        valid_idx = np.where(np.isfinite(processor.final_sav_ave))[0]
         if len(valid_idx) == 0:
             return
         
         start_idx = valid_idx[0]
         end_idx = valid_idx[-1] + 1
 
-        valid_final_med = processor.final_med[start_idx:end_idx]
+        valid_final_sav_ave = processor.final_sav_ave[start_idx:end_idx]
         valid_final_ave = processor.final_ave[start_idx:end_idx]
-        N = len(valid_final_med)
+        N = len(valid_final_sav_ave)
 
         if N == 0:
             return
 
-        fft_med = np.fft.fft(valid_final_med)
+        fft_sav_ave = np.fft.fft(valid_final_sav_ave)
         fft_ave = np.fft.fft(valid_final_ave)
 
         freq = np.fft.fftfreq(N, d=1.0/sample_rate)
 
         pos_mask = freq >= 0
         freq_pos = freq[pos_mask]
-        fft_med_pos = np.abs(fft_med)[pos_mask]
+        fft_sav_ave_pos = np.abs(fft_sav_ave)[pos_mask]
         fft_ave_pos = np.abs(fft_ave)[pos_mask]
 
-        if len(fft_med_pos) > 1:
-            idx_med = np.argmax(fft_med_pos[1:]) + 1
+        if len(fft_sav_ave_pos) > 1:
+            idx_sav_ave = np.argmax(fft_sav_ave_pos[1:]) + 1
         else:
-            idx_med = 0
+            idx_sav_ave = 0
 
-        dom_freq_med = freq_pos[idx_med]
+        dom_freq_sav_ave = freq_pos[idx_sav_ave]
 
         if len(fft_ave_pos) > 1:
             idx_ave = np.argmax(fft_ave_pos[1:]) + 1
@@ -187,11 +187,11 @@ class ResponsivePlot:
 
         ax_med = self.axes[6]
         ax_med.clear()
-        ax_med.plot(freq_pos, fft_med_pos, color='#a4aca7')
-        ax_med.set_title("FFT of Final Med", fontsize=10)
+        ax_med.plot(freq_pos, fft_sav_ave_pos, color='#a4aca7')
+        ax_med.set_title("FFT of Final MONO", fontsize=10)
         ax_med.set_xlabel("Frequency (Hz)")
         ax_med.set_ylabel("Amplitude")
-        ax_med.axvline(x=dom_freq_med, color='#f9cb8b', linestyle='--', linewidth=1, alpha = 0.8, label=f"Dom Freq: {dom_freq_med:.2f} Hz")
+        ax_med.axvline(x=dom_freq_sav_ave, color='#f9cb8b', linestyle='--', linewidth=1, alpha = 0.8, label=f"Dom Freq: {dom_freq_sav_ave:.2f} Hz")
         ax_med.legend(fontsize=8, loc='best')
 
         ax_ave = self.axes[7]
@@ -307,13 +307,15 @@ class OptimizedProcessor:
         self._init_parameters()
         self.data = None
         self.processed_columns = {
-            'med_baseline': None,
+            'morphology_baseline': None,
             'ave_baseline': None,
-            'med_filt': None,
+            'morphology_filt': None,
             'ave_filt': None,
-            'med_savgol': None,
+            'denoised_data1': None,
+            'denoised_data2': None,
             'ave_savgol': None,
-            'final_med': None,
+            'final_sav': None,
+            'final_sav_ave': None,
             'final_ave': None
         }
 
@@ -324,23 +326,26 @@ class OptimizedProcessor:
             'window_size': (20, 5, 100),
             'savgol_window': (53, 5, 99),
             'savgol_order': (3, 1, 5),
-            'structure_size': (100, 10, 1000)
+            'structure_size': (200, 10, 1000)
         }
 
     def load_data(self, filename):
         try:
             self.data = pd.read_csv(filename, engine='c')
             self.data.attrs['filename'] = os.path.basename(filename)
-            self._preprocess_data()
+            self._preprocess_data(filename)
             return True
         except Exception as e:
             messagebox.showerror("错误", f"文件读取失败: {str(e)}")
             return False
 
     """need to be modified"""
-    def _preprocess_data(self):
+    def _preprocess_data(self, filename):
         if 'time' not in self.data.columns:
-            self.data.insert(0, 'time', np.arange(len(self.data)) * 0.002)
+            #self.data.insert(0, 'time', np.arange(len(self.data)) * 0.002)
+            self.data.rename(columns={self.data.columns[0]:'time'}, inplace=True)
+            self.data.iloc[:, 0] = [i*0.002 for i in range(len(self.data))]
+            self.data.to_csv(filename, index = None)
         self.xdata = self.data['time'].values
         self.ydata = self.data.iloc[:, 1].values.astype(np.float64)
 
@@ -371,10 +376,10 @@ class OptimizedProcessor:
         kernel_size = kernel_size + 1 if kernel_size % 2 == 0 else kernel_size
         savgol_window = savgol_window + 1 if savgol_window % 2 == 0 else savgol_window
 
-        self.morphology_baseline = grey_closing(self.ydata, structure=np.ones(structure_size))
-        self.morphology_filt = -(self.ydata - self.morphology_baseline)
+        self.morphology_baseline = grey_opening(self.ydata, structure=np.ones(structure_size))
+        self.morphology_filt = (self.ydata - self.morphology_baseline)
         self.denoised_data1 = self.notch_filter(self.morphology_filt)
-        self.denoised_data2 = self.advanced_wavelet_denoise(self.denoised_data1)
+        self.denoised_data2 = self.advanced_wavelet_denoise(self.denoised_data1)[:len(self.xdata)]
         self.final_sav = scipy.signal.savgol_filter(
             self.denoised_data2,
             savgol_window,
@@ -389,6 +394,7 @@ class OptimizedProcessor:
         self.med_filt = self.ydata - self.med_baseline
         self.ave_filt = self.ydata - self.ave_baseline
 
+        """
         half_k = kernel_size // 2
 
         self.med_filt[:half_k] = np.nan
@@ -397,7 +403,7 @@ class OptimizedProcessor:
         self.ave_filt[-half_k:] = np.nan
 
         self.trim = half_k
-
+        """
         
 
         self.med_savgol = scipy.signal.savgol_filter(
@@ -417,13 +423,15 @@ class OptimizedProcessor:
         self.final_ave = np.convolve(self.ave_savgol, smooth_window, 'same')
         
         self.processed_columns.update({
-            'med_baseline': self.med_baseline,
+            'morphology_baseline': self.morphology_baseline,
             'ave_baseline': self.ave_baseline,
-            'med_filt': self.med_filt,
+            'morphology_filt': self.morphology_filt,
             'ave_filt': self.ave_filt,
-            'med_savgol': self.med_savgol,
+            'denoised_data1': self.denoised_data1,
+            'denoised_data2': self.denoised_data2,
             'ave_savgol': self.ave_savgol,
-            'final_med': self.final_med,
+            'final_sav': self.final_sav,
+            'final_sav_ave': self.final_sav_ave,
             'final_ave': self.final_ave
         })
 
