@@ -127,7 +127,7 @@ def plot_all(xdata, ydata, filename):
 
     ax11 = fig.add_subplot(gs[1, 1])
     ax11.plot(xdata, ydata_2stage_filt)
-    ax11.set_title('1-stage morphology')
+    ax11.set_title('2-stage morphology')
 
     ax20 = fig.add_subplot(gs[2, 0])
     ax20.plot(xdata, ydata_final)
