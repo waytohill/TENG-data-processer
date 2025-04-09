@@ -6,7 +6,7 @@ import matplotlib.gridspec as gridspec
 import numpy as np
 import scipy
 from scipy import signal
-from scipy.ndimage import grey_closing
+from scipy.ndimage import grey_closing, grey_opening
 from scipy.signal import iirnotch, filtfilt
 from scipy.fft import fft, fftfreq
 import pywt
@@ -43,6 +43,44 @@ def advanced_wavelet_denoise(signal, wavelet='db8', level=5):
     coeffs = [pywt.threshold(c, t, mode='soft') for c, t in zip(coeffs, thresholds)]
     return pywt.waverec(coeffs, wavelet)
 
+# 2-stage filter based on morphology
+def morphology_baseline_removal(f0, B1_width, B2_width):
+
+    f0 = np.asarray(f0).flatten()
+
+    B1 = _get_struct_element(B1_width)
+    f1 = _first_stage_filter(f0, B1)
+
+    B2 = _get_struct_element(B2_width)
+    f2 = _second_stage_filter(f1, B2)
+
+    f_clean = f0 - f2
+    return f_clean, f1, f2
+
+def _get_struct_element(width):
+    return np.ones((int(width),), dtype=np.uint8)
+
+def _first_stage_filter(f0, B):
+    open_close = grey_closing(grey_opening(f0, structure=B), structure=B)
+    close_open = grey_opening(grey_closing(f0, structure=B), structure=B)
+    return (open_close + close_open) / 2
+
+def _second_stage_filter(f1, B):
+    f1 = np.asarray(f1).flatten()
+    open_close = grey_closing(grey_opening(f1, structure=B), structure=B)
+    close_open = grey_opening(grey_closing(f1, structure=B), structure=B)
+    return (open_close + close_open) / 2
+
+def auto_select_widths(signal, min_pulse_width=20):
+    peaks, _ = scipy.signal.find_peaks(signal, prominence=np.std(signal)/2)
+    Wp = int(np.median(np.diff(peaks))) if len(peaks)>1 else min_pulse_width
+
+    B1_width = int(0.8 * Wp)
+    B2_width = int(1.2 * Wp)
+
+    return max(5, B1_width), max(B2_width, B1_width + 10)
+
+
 def vibration_detect(ydata):
     ydata = ydata - np.mean(ydata)
     fft_result = fft(ydata)
@@ -54,43 +92,60 @@ def vibration_detect(ydata):
     return dominant_frequency, positive_freqs, positive_magnitude
 
 def plot_all(xdata, ydata, filename):
+
     fig = plt.figure(figsize=(12, 8))
-    gs = gridspec.GridSpec(3, 2)
+    gs = gridspec.GridSpec(4, 2)
 
     baseline_morphology = morphology_baseline(ydata)
     ydata_morphology = -(ydata - baseline_morphology)
     ydata_denoise1 = notch_filter(ydata_morphology)
     ydata_denoise2 = advanced_wavelet_denoise(ydata_denoise1)[:len(xdata)]
     ydata_final = moving_ave(savgolfil(ydata_denoise2, window_length, kvalue), windowsize)
+    
+    B1_width, B2_width = auto_select_widths(ydata)
+    
+    ydata_2stage_filt, f1, f2 = morphology_baseline_removal(ydata, B1_width, B2_width)
+    
+    ydata_2stage_filt_denoise1 = notch_filter(ydata_2stage_filt)
+    ydata_2stage_filt_denoise2 = advanced_wavelet_denoise(ydata_2stage_filt_denoise1)[:len(xdata)]
+    ydata_2stage_filt_denoise_final = moving_ave(savgolfil(ydata_2stage_filt_denoise2, window_length, kvalue), windowsize)
 
-    dominant_frequency1, positive_freqs1, positive_magnitude1 = vibration_detect(np.array(ydata_denoise2))
-    dominant_frequency2, positive_freqs2, positive_magnitude2 = vibration_detect(np.array(ydata_final))
 
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax1.plot(xdata, ydata)
-    ax1.set_title('Origin')
 
-    ax11 = fig.add_subplot(gs[0, 1])
-    ax11.plot(xdata, ydata_morphology)
-    ax11.set_title("ydata_morphology")
 
-    ax2 = fig.add_subplot(gs[1, 0])
-    ax2.plot(xdata, ydata_denoise2)
-    ax2.set_title('Denoised Step 2')
+    
+    dominant_frequency1, positive_freqs1, positive_magnitude1 = vibration_detect(np.array(ydata_final))
+    dominant_frequency2, positive_freqs2, positive_magnitude2 = vibration_detect(np.array(ydata_2stage_filt_denoise_final))
 
-    ax3 = fig.add_subplot(gs[1, 1])
-    ax3.plot(xdata, ydata_final)
-    ax3.set_title('Final Denoised')
+    ax00 = fig.add_subplot(gs[0, 0])
+    ax00.plot(xdata, ydata)
+    ax00.set_title('Origin')
 
-    ax4 = fig.add_subplot(gs[2, 0])
-    ax4.plot(positive_freqs1, positive_magnitude1, label=f"{dominant_frequency1:.2f} Hz")
-    ax4.set_title('FFT of Step 2')
-    ax4.legend()
+    ax10 = fig.add_subplot(gs[1, 0])
+    ax10.plot(xdata, ydata_morphology)
+    ax10.set_title("1-stage morphology")
 
-    ax5 = fig.add_subplot(gs[2, 1])
-    ax5.plot(positive_freqs2, positive_magnitude2, label=f"{dominant_frequency2:.2f} Hz")
-    ax5.set_title('FFT of Final')
-    ax5.legend()
+    ax11 = fig.add_subplot(gs[1, 1])
+    ax11.plot(xdata, ydata_2stage_filt)
+    ax11.set_title('1-stage morphology')
+
+    ax20 = fig.add_subplot(gs[2, 0])
+    ax20.plot(xdata, ydata_final)
+    ax20.set_title('Final of 1-stage')
+
+    ax21 = fig.add_subplot(gs[2, 1])
+    ax21.plot(xdata, ydata_2stage_filt_denoise_final)
+    ax21.set_title('Final of 2-stage')
+
+    ax30 = fig.add_subplot(gs[3, 0])
+    ax30.plot(positive_freqs1, positive_magnitude1, label=f"{dominant_frequency1:.2f} Hz")
+    ax30.set_title('FFT of 1-Stage Filt')
+    ax30.legend()
+
+    ax31 = fig.add_subplot(gs[3, 1])
+    ax31.plot(positive_freqs2, positive_magnitude2, label=f"{dominant_frequency2:.2f} Hz")
+    ax31.set_title('FFT of 2-Stage Filt')
+    ax31.legend()
 
     fig.tight_layout()
     return fig

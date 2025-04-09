@@ -6,13 +6,14 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 from matplotlib.gridspec import GridSpec
 import numpy as np
 import scipy.signal
+
 import os
 from scipy.interpolate import UnivariateSpline, interp1d
 from scipy.ndimage import grey_closing, grey_opening
 import pywt
 
 
-versionNumber = "V0.1.4.20250407"
+versionNumber = "V0.1.5.20250409"
 
 
 
@@ -183,10 +184,11 @@ class ResponsivePlot:
                 fft_vals = np.fft.fft(signal)
                 freqs = np.fft.fftfreq(N, d=1.0/fs)
                 pos_mask = freqs >= 0
-                ax.plot(freqs[pos_mask], np.abs(fft_vals)[pos_mask], color=color)
+                ax.plot(freqs[pos_mask], np.abs(fft_vals)[pos_mask], color=color, label=f"Dom Freq: {freqs[np.argmax(np.abs(fft_vals)[pos_mask])]:.2f} Hz")
                 ax.set_title(f"{title} - FFT")
                 ax.set_xlabel("Frequency (Hz)")
                 ax.set_ylabel("Amplitude")
+                ax.legend(loc='best')
             elif mode == 'STFT':
                 f, t, Zxx = scipy.signal.stft(signal, fs=fs, nperseg=256)
                 im = ax.pcolormesh(t, f, np.abs(Zxx), shading='gouraud', cmap='viridis')
@@ -199,7 +201,8 @@ class ResponsivePlot:
                 
             elif mode == 'CWT':
                 widths = np.arange(1, 128)
-                cwtmatr = scipy.signal.cwt(signal, scipy.signal.morlet2, widths, w=6)
+                wavelet_func = lambda M, s: scipy.signal.morlet2(M, s, w=6)
+                cwtmatr = scipy.signal.cwt(signal, wavelet_func, widths)
                 time_axis = np.linspace(0, N/fs, N)
                 im =ax.imshow(np.abs(cwtmatr), extent=[0, time_axis[-1], 1, 128],
                               cmap='jet', aspect='auto', origin='lower')
@@ -392,9 +395,9 @@ class OptimizedProcessor:
             'freq': (0.6, 0.1, 8.0),
             'sample_rate': (500, 50, 1000),
             'window_size': (20, 5, 100),
-            'savgol_window': (53, 5, 99),
+            'savgol_window': (21, 5, 99),
             'savgol_order': (3, 1, 5),
-            'structure_size': (200, 10, 1000)
+            'structure_size': (80, 10, 1000)
         }
 
     def load_data(self, filename):
