@@ -122,10 +122,10 @@ class ResponsivePlot:
             (3, "Ave Filter", [processor.ave_filt], {'labels': ['Ave Filter']}),
             (4, "Morphology Processor", 
              [processor.denoised_data1, processor.denoised_data2, processor.final_sav_ave],
-             {'alpha': [0.3, 0.7, 1], 'color': ['#1772b4','#f17666', '#b7d07a'], 'labels': ['Denoised data1', 'Denoised data2', 'Final MONO']}),
+             {'alpha': [1, 1, 1], 'color': ['#1772b4','#f17666', '#b7d07a'], 'labels': ['Denoised data1', 'Denoised data2', 'Final MONO']}),
             (5, "Ave Processor", 
              [processor.ave_filt, processor.ave_savgol, processor.final_ave],
-             {'alpha': [0.3, 0.7, 1], 'color': ['#1772b4','#f17666', '#b7d07a'], 'labels': ['Ave filt', 'Ave savgol', 'Final Ave']})
+             {'alpha': [1, 1, 1], 'color': ['#1772b4','#f17666', '#b7d07a'], 'labels': ['Ave filt', 'Ave savgol', 'Final Ave']})
         ]
 
         for idx, title, datasets, styles in plots_config:
