@@ -439,6 +439,14 @@ class OptimizedProcessor:
         self.xdata = self.data['time'].values
         self.ydata = self.data.iloc[:, 1].values.astype(np.float64)
 
+    """
+    need to modify
+    using grey_closing, grey_opening, gery_closing(grey_opening()), or grey_opening(grey_closing())
+    """
+    def morphology_baseline(self, signal, structure_size=100):
+        structure = np.ones(structure_size)
+        return grey_closing(signal, structure=structure)
+
     def notch_filter(self, signal, fs=500, freq=50, Q=30):
         nyq = 0.5 * fs
         freq_normalized = freq / nyq
@@ -452,6 +460,45 @@ class OptimizedProcessor:
         thresholds[0] = 0
         coeffs = [pywt.threshold(c, t, mode='soft') for c, t in zip(coeffs, thresholds)]
         return pywt.waverec(coeffs, wavelet)
+    
+    """2-stage filter based on morphology"""
+    def morphology_baseline_removal(self, f0, B1_width, B2_width):
+
+        f0 = np.asarray(f0).flatten()
+
+        B1 = self._get_struct_element(B1_width)
+        f1 = self._first_stage_filter(f0, B1)
+
+        B2 = self._get_struct_element(B2_width)
+        f2 = self._second_stage_filter(f1, B2)
+
+        f_clean = f0 - f2
+        return f_clean, f1, f2
+    
+    def _get_strcut_elecment(width):
+        return np.ones((int(width),), dtype=np.uint8)
+    
+    def _first_stage_filter(f0, B):
+        open_close = grey_closing(grey_opening(f0, structure=B), structure=B)
+        close_open = grey_opening(grey_closing(f0, structure=B), structure=B)
+        return (open_close + close_open) / 2
+    
+    def _second_stage_filter(f1, B):
+        f1 = np.asarray(f1).flatten()
+        open_close = grey_closing(grey_opening(f1, structure=B), structure=B)
+        close_open = grey_opening(grey_closing(f1, structure=B), structure=B)
+        return (open_close + close_open) / 2
+    
+    def auto_select_widths(self, signal, min_pulse_width=20):
+        peaks, _ = scipy.signal.find_peaks(signal, prominence=np.std(signal)/2)
+        Wp = int(np.median(np.diff(peaks))) if len(peaks)>1 else min_pulse_width
+
+        B1_width = int(0.8 * Wp)
+        B2_width = int(1.2 * Wp)
+
+        return max(5, B1_width), max(B2_width, B1_width + 10)
+    
+
 
 
     def process_data(self):
