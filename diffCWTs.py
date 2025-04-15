@@ -161,6 +161,7 @@ class ResponsivePlot:
             #ax.autoscale_view()
         
         # merged into plots_config
+        self.figure.set_tight_layout(True)
         self.update_fft_plots(processor)
         self.canvas.draw()
     
@@ -356,7 +357,7 @@ class EnvelopePlot:
         self.master.columnconfigure(0, weight=1)
         
         
-        #self.figure.set_tight_layout(True)
+        self.figure.set_tight_layout(True)
         
         
     def update_plots(self, processor):
