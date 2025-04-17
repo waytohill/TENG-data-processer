@@ -8,7 +8,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 from matplotlib.gridspec import GridSpec
 import numpy as np
 import scipy.signal
-
+from pandas import ExcelWriter
 import os
 from scipy.interpolate import UnivariateSpline, interp1d
 from scipy.ndimage import grey_closing, grey_opening
@@ -753,6 +753,7 @@ class AdaptiveGUI:
         ttk.Button(btn_frame, text="重新计算", command=self._recalculate).pack(fill='x', pady=3)
         ttk.Button(btn_frame, text="保存图像", command=self._save_image).pack(fill='x', pady=3)
         ttk.Button(btn_frame, text="保存数据", command=self._save_data).pack(fill='x', pady=3)
+        ttk.Button(btn_frame, text="保存所有分析数据", command=self._save_all_data).pack(fill='x', pady=3)
         ttk.Button(btn_frame, text="退出程序", command=self._safe_exit).pack(fill='x', pady=3)
 
     def _update_sync_indices(self):
@@ -853,6 +854,86 @@ class AdaptiveGUI:
             success = self.processor.save_processed_data(filename)
             if success:
                 messagebox.showinfo("成功", f"数据已成功保存至:\n{filename}")
+
+
+    def _save_all_data(self):
+        if self.processor.data is None:
+            messagebox.showwarning("警告", "请先打开并处理数据文件")
+            return
+
+        
+        x = self.processor.xdata
+        signals = {
+            'Origin': self.processor.ydata,
+            'Morphology': self.processor.morphology_filt,
+            'Denoised2': self.processor.denoised_data2,
+            'FinalSav': self.processor.final_sav,
+            'FinalMono': self.processor.final_sav_ave
+        }
+
+        
+        def compute_spectrum(signal, fs, mode):
+            signal = signal - np.mean(signal)
+            N = len(signal)
+            if N < 32:
+                return None
+            if mode == 'FFT':
+                fft = np.fft.fft(signal)
+                freqs = np.fft.fftfreq(N, 1/fs)
+                return freqs, np.abs(fft)
+            elif mode == 'STFT':
+                f, t, Zxx = scipy.signal.stft(signal, fs=fs, nperseg=256)
+                return (t, f, np.abs(Zxx))
+            elif mode == 'CWT':
+                widths = np.arange(1, 128)
+                wavelet = lambda M, s: scipy.signal.morlet2(M, s, w=6)
+                cwt = scipy.signal.cwt(signal, wavelet, widths)
+                return (np.linspace(0, N/fs, N), widths, np.abs(cwt))
+            return None
+
+        
+        all_data = {}
+        sample_rate = self.processor.params['sample_rate'][0]
+        for name, sig in signals.items():
+            valid = np.isfinite(sig)
+            start = np.where(valid)[0][0]
+            end = np.where(valid)[0][-1] + 1
+            sig_valid = sig[start:end]
+
+            
+            all_data[f"{name}_Time"] = pd.DataFrame({
+                'Time': x[start:end],
+                'Value': sig_valid
+            })
+
+            
+            for mode in ['FFT', 'STFT', 'CWT']:
+                result = compute_spectrum(sig_valid, sample_rate, mode)
+                if result is None:
+                    continue
+                if mode == 'FFT':
+                    freqs, amp = result
+                    pos_mask = freqs >= 0
+                    df = pd.DataFrame({'Frequency': freqs[pos_mask], 'Amplitude': amp[pos_mask]})
+                elif mode == 'STFT':
+                    t, f, Z = result
+                    df = pd.DataFrame(Z.T, index=t, columns=f)
+                elif mode == 'CWT':
+                    t, scales, cwt = result
+                    df = pd.DataFrame(cwt, columns=t, index=scales)
+                all_data[f"{name}_{mode}"] = df
+
+        
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel文件", "*.xlsx")],
+            initialfile="All_Data_Analysis"
+        )
+        if filename:
+            with pd.ExcelWriter(filename) as writer:
+                for sheet_name, data in all_data.items():
+                    data.to_excel(writer, sheet_name=sheet_name[:31])
+            messagebox.showinfo("成功", f"数据已保存至：\n{filename}")
 
     def _safe_exit(self):
         plt.close('all')
